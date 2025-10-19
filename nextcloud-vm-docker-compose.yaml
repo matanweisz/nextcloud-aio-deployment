@@ -1,0 +1,584 @@
+# ============================================================================
+# NextCloud All-in-One Docker Compose Configuration
+# ============================================================================
+# Target Environment: Ubuntu 24.04 VM
+# Resources: 16GB RAM, 64GB Storage, 12 vCPUs (Hyper-V)
+# Network: HTTP only (SSL terminated by external Nginx reverse proxy)
+# Storage: NAS server mounted via NFS/SMB
+#
+# This configuration deploys NextCloud AIO with all essential services:
+# - NextCloud (core application)
+# - PostgreSQL 16 (database)
+# - Redis (caching and session management)
+# - Apache (web server)
+# - Collabora (online office suite)
+# - Talk (video conferencing with TURN/STUN)
+# - Imaginary (image processing)
+# - Whiteboard (collaborative drawing)
+# - Notify Push (real-time notifications)
+# ============================================================================
+
+version: "3.8"
+
+services:
+  # ==========================================================================
+  # NEXTCLOUD CORE APPLICATION
+  # ==========================================================================
+  # Main NextCloud application container with PHP-FPM
+  # Handles all business logic, file management, and user operations
+  nextcloud-aio-nextcloud:
+    image: nextcloud/aio-nextcloud:latest
+    container_name: nextcloud-aio-nextcloud
+    hostname: nextcloud-core
+
+    restart: unless-stopped
+
+    # Environment configuration
+    environment:
+      # === Service Discovery ===
+      NEXTCLOUD_HOST: nextcloud-aio-nextcloud
+      APACHE_HOST: nextcloud-aio-apache
+      APACHE_PORT: 11000
+
+      # === Database Configuration ===
+      POSTGRES_HOST: nextcloud-aio-database
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: nextcloud_database
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}  # Set in .env file
+
+      # === Redis Configuration ===
+      REDIS_HOST: nextcloud-aio-redis
+      REDIS_HOST_PASSWORD: ${REDIS_PASSWORD}  # Set in .env file
+      REDIS_DB_INDEX: 0
+
+      # === Domain and Protocol ===
+      NC_DOMAIN: nextcloud.infinitylabs.co.il
+      OVERWRITEHOST: nextcloud.infinitylabs.co.il
+      OVERWRITEPROTOCOL: https  # External Nginx handles SSL
+
+      # === Administrator Account ===
+      ADMIN_USER: admin
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}  # Set in .env file
+
+      # === Data Directory ===
+      # This should point to NAS storage mounted on the host
+      NEXTCLOUD_DATA_DIR: /mnt/ncdata
+
+      # === PHP Performance Tuning (for 16GB RAM) ===
+      PHP_MEMORY_LIMIT: 1024M      # Increased for better performance
+      PHP_UPLOAD_LIMIT: 16G        # Max file upload size
+      PHP_MAX_TIME: 3600           # Max execution time (1 hour)
+
+      # === Timezone ===
+      TZ: Asia/Jerusalem  # Adjust to your timezone
+
+      # === Enabled Services ===
+      COLLABORA_ENABLED: "yes"
+      COLLABORA_HOST: nextcloud-aio-collabora
+      TALK_ENABLED: "yes"
+      TALK_PORT: 3478
+      IMAGINARY_ENABLED: "yes"
+      IMAGINARY_HOST: nextcloud-aio-imaginary
+      WHITEBOARD_ENABLED: "yes"
+      ONLYOFFICE_ENABLED: ""       # Using Collabora instead
+      CLAMAV_ENABLED: ""           # Disabled for performance
+      FULLTEXTSEARCH_ENABLED: ""   # Disabled for simplicity
+
+      # === Secrets for Inter-Service Communication ===
+      AIO_TOKEN: ${AIO_TOKEN}
+      TURN_SECRET: ${TURN_SECRET}
+      SIGNALING_SECRET: ${SIGNALING_SECRET}
+      IMAGINARY_SECRET: ${IMAGINARY_SECRET}
+      WHITEBOARD_SECRET: ${WHITEBOARD_SECRET}
+
+      # === Startup Apps ===
+      # Apps to enable on first startup
+      STARTUP_APPS: "deck twofactor_totp tasks calendar contacts notes"
+
+      # === Additional Configuration ===
+      INSTALL_LATEST_MAJOR: "yes"
+      REMOVE_DISABLED_APPS: "yes"
+      THIS_IS_AIO: "true"
+
+      # === Collabora Configuration ===
+      NEXTCLOUD_EXEC_COMMANDS: |
+        echo 'Activating Collabora config...'
+        php /var/www/html/occ richdocuments:activate-config
+
+    # Volume mounts
+    volumes:
+      # NextCloud installation files (local storage)
+      - nextcloud_aio_nextcloud:/var/www/html:rw
+
+      # User data directory (NAS storage - mount point on host)
+      # IMPORTANT: Mount your NAS share to /mnt/nas-nextcloud-data on the host
+      - /mnt/nas-nextcloud-data:/mnt/ncdata:rw
+
+    networks:
+      - nextcloud-aio
+
+    # Security options
+    security_opt:
+      - label:disable
+
+    depends_on:
+      - nextcloud-aio-database
+      - nextcloud-aio-redis
+
+    # Resource limits (adjust based on load)
+    deploy:
+      resources:
+        limits:
+          cpus: '6'           # Max 6 of 12 available cores
+          memory: 6G          # Max 6GB of 16GB available
+        reservations:
+          cpus: '2'           # Min 2 cores guaranteed
+          memory: 2G          # Min 2GB guaranteed
+
+  # ==========================================================================
+  # APACHE WEB SERVER
+  # ==========================================================================
+  # Handles HTTP requests and proxies to NextCloud PHP-FPM
+  # External Nginx will proxy to this container on port 11000
+  nextcloud-aio-apache:
+    image: nextcloud/aio-apache:latest
+    container_name: nextcloud-aio-apache
+    hostname: nextcloud-apache
+
+    restart: unless-stopped
+
+    environment:
+      NC_DOMAIN: nextcloud.infinitylabs.co.il
+      NEXTCLOUD_HOST: nextcloud-aio-nextcloud
+      APACHE_HOST: nextcloud-aio-apache
+      APACHE_PORT: 11000
+      COLLABORA_HOST: nextcloud-aio-collabora
+      TALK_HOST: nextcloud-aio-talk
+      NOTIFY_PUSH_HOST: nextcloud-aio-notify-push
+      WHITEBOARD_HOST: nextcloud-aio-whiteboard
+      TZ: Asia/Jerusalem
+
+      # Upload limits (must match PHP settings)
+      APACHE_MAX_SIZE: 17179869184  # 16GB in bytes
+      APACHE_MAX_TIME: 3600
+
+    ports:
+      # Only expose on localhost - external Nginx will proxy here
+      - "127.0.0.1:11000:11000"
+
+    volumes:
+      - nextcloud_aio_nextcloud:/var/www/html:ro  # Read-only
+      - nextcloud_aio_apache:/mnt/data:rw
+
+    networks:
+      - nextcloud-aio
+
+    read_only: true
+
+    security_opt:
+      - label:disable
+
+    cap_drop:
+      - NET_RAW
+
+    depends_on:
+      - nextcloud-aio-nextcloud
+
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  # ==========================================================================
+  # POSTGRESQL DATABASE
+  # ==========================================================================
+  # Primary database for NextCloud metadata, users, shares, etc.
+  # Data stored locally on VM for performance
+  nextcloud-aio-database:
+    image: nextcloud/aio-postgresql:latest
+    container_name: nextcloud-aio-database
+    hostname: nextcloud-db
+
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: nextcloud_database
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data
+      TZ: Asia/Jerusalem
+      PGTZ: Asia/Jerusalem
+
+    volumes:
+      # Database data (local storage for performance)
+      - nextcloud_aio_database:/var/lib/postgresql/data:rw
+      # Database backups
+      - nextcloud_aio_database_dump:/mnt/data:rw
+
+    networks:
+      - nextcloud-aio
+
+    read_only: true
+
+    security_opt:
+      - label:disable
+
+    cap_drop:
+      - NET_RAW
+
+    # Database performance tuning for 16GB RAM system
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+  # ==========================================================================
+  # REDIS CACHE
+  # ==========================================================================
+  # In-memory caching for sessions, file locking, and transactional locks
+  # Critical for multi-user performance
+  nextcloud-aio-redis:
+    image: nextcloud/aio-redis:latest
+    container_name: nextcloud-aio-redis
+    hostname: nextcloud-redis
+
+    restart: unless-stopped
+
+    environment:
+      REDIS_HOST_PASSWORD: ${REDIS_PASSWORD}
+      TZ: Asia/Jerusalem
+
+    volumes:
+      - nextcloud_aio_redis:/data:rw
+
+    networks:
+      - nextcloud-aio
+
+    read_only: true
+
+    security_opt:
+      - label:disable
+
+    cap_drop:
+      - NET_RAW
+
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G          # Redis benefits from more RAM
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # ==========================================================================
+  # COLLABORA ONLINE OFFICE
+  # ==========================================================================
+  # Online office suite for editing documents, spreadsheets, presentations
+  # Requires significant resources for document rendering
+  nextcloud-aio-collabora:
+    image: nextcloud/aio-collabora:latest
+    container_name: nextcloud-aio-collabora
+    hostname: nextcloud-collabora
+
+    restart: unless-stopped
+
+    environment:
+      aliasgroup1: https://nextcloud.infinitylabs.co.il:443
+      TZ: Asia/Jerusalem
+      server_name: nextcloud.infinitylabs.co.il
+      dictionaries: "en_US"
+
+    networks:
+      - nextcloud-aio
+
+    cap_add:
+      - MKNOD
+
+    security_opt:
+      - label:disable
+
+    deploy:
+      resources:
+        limits:
+          cpus: '3'
+          memory: 3G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+  # ==========================================================================
+  # NEXTCLOUD TALK (WebRTC)
+  # ==========================================================================
+  # Video conferencing, chat, and TURN/STUN server
+  # Requires UDP ports for WebRTC
+  nextcloud-aio-talk:
+    image: nextcloud/aio-talk:latest
+    container_name: nextcloud-aio-talk
+    hostname: nextcloud-talk
+
+    restart: unless-stopped
+
+    environment:
+      NC_DOMAIN: nextcloud.infinitylabs.co.il
+      TALK_HOST: nextcloud-aio-talk
+      TALK_PORT: 3478
+      TURN_SECRET: ${TURN_SECRET}
+      SIGNALING_SECRET: ${SIGNALING_SECRET}
+      INTERNAL_SECRET: ${INTERNAL_SECRET}
+      TZ: Asia/Jerusalem
+
+    ports:
+      # TURN/STUN ports for WebRTC - must be publicly accessible
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+
+    networks:
+      - nextcloud-aio
+
+    read_only: true
+
+    security_opt:
+      - label:disable
+
+    cap_drop:
+      - NET_RAW
+
+    ulimits:
+      nofile:
+        soft: 200000
+        hard: 200000
+
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # ==========================================================================
+  # IMAGINARY IMAGE PROCESSOR
+  # ==========================================================================
+  # Fast image resizing and thumbnail generation
+  # Improves performance for photo libraries
+  nextcloud-aio-imaginary:
+    image: nextcloud/aio-imaginary:latest
+    container_name: nextcloud-aio-imaginary
+    hostname: nextcloud-imaginary
+
+    restart: unless-stopped
+
+    environment:
+      TZ: Asia/Jerusalem
+      IMAGINARY_SECRET: ${IMAGINARY_SECRET}
+      PORT: 9000
+      MALLOC_ARENA_MAX: 2
+
+    networks:
+      - nextcloud-aio
+
+    read_only: true
+
+    security_opt:
+      - label:disable
+
+    cap_add:
+      - SYS_NICE  # For process priority management
+
+    cap_drop:
+      - NET_RAW
+
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  # ==========================================================================
+  # WHITEBOARD
+  # ==========================================================================
+  # Collaborative whiteboard/drawing application
+  nextcloud-aio-whiteboard:
+    image: nextcloud/aio-whiteboard:latest
+    container_name: nextcloud-aio-whiteboard
+    hostname: nextcloud-whiteboard
+
+    restart: unless-stopped
+
+    environment:
+      TZ: Asia/Jerusalem
+      NEXTCLOUD_URL: https://nextcloud.infinitylabs.co.il
+      JWT_SECRET_KEY: ${WHITEBOARD_SECRET}
+      STORAGE_STRATEGY: redis
+      REDIS_HOST: nextcloud-aio-redis
+      REDIS_HOST_PASSWORD: ${REDIS_PASSWORD}
+      BACKUP_DIR: /tmp
+
+    networks:
+      - nextcloud-aio
+
+    read_only: true
+
+    security_opt:
+      - label:disable
+
+    cap_drop:
+      - NET_RAW
+
+    depends_on:
+      - nextcloud-aio-redis
+
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+  # ==========================================================================
+  # NOTIFY PUSH
+  # ==========================================================================
+  # High-performance push notifications for real-time updates
+  # Eliminates need for polling, reduces server load
+  nextcloud-aio-notify-push:
+    image: nextcloud/aio-notify-push:latest
+    container_name: nextcloud-aio-notify-push
+    hostname: nextcloud-notify
+
+    restart: unless-stopped
+
+    environment:
+      NC_DOMAIN: nextcloud.infinitylabs.co.il
+      NEXTCLOUD_HOST: nextcloud-aio-nextcloud
+      REDIS_HOST: nextcloud-aio-redis
+      REDIS_HOST_PASSWORD: ${REDIS_PASSWORD}
+      POSTGRES_HOST: nextcloud-aio-database
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: nextcloud_database
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: Asia/Jerusalem
+
+    volumes:
+      - nextcloud_aio_nextcloud:/nextcloud:ro
+
+    networks:
+      - nextcloud-aio
+
+    read_only: true
+
+    security_opt:
+      - label:disable
+
+    cap_drop:
+      - NET_RAW
+
+    depends_on:
+      - nextcloud-aio-nextcloud
+      - nextcloud-aio-redis
+      - nextcloud-aio-database
+
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+# ============================================================================
+# NETWORKS
+# ============================================================================
+networks:
+  nextcloud-aio:
+    name: nextcloud-aio
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+# ============================================================================
+# VOLUMES
+# ============================================================================
+# Named volumes for persistent data
+# Database and Redis data stored locally for performance
+# User files stored on NAS (mounted via host path)
+volumes:
+  # NextCloud application files
+  nextcloud_aio_nextcloud:
+    name: nextcloud_aio_nextcloud
+
+  # PostgreSQL database data
+  nextcloud_aio_database:
+    name: nextcloud_aio_database
+
+  # PostgreSQL backup dumps
+  nextcloud_aio_database_dump:
+    name: nextcloud_aio_database_dump
+
+  # Redis cache data
+  nextcloud_aio_redis:
+    name: nextcloud_aio_redis
+
+  # Apache temporary files
+  nextcloud_aio_apache:
+    name: nextcloud_aio_apache
+
+# ============================================================================
+# IMPORTANT NOTES
+# ============================================================================
+#
+# 1. ENVIRONMENT VARIABLES (.env file required):
+#    Create a .env file in the same directory with these variables:
+#
+#    POSTGRES_PASSWORD=<strong-random-password>
+#    REDIS_PASSWORD=<strong-random-password>
+#    ADMIN_PASSWORD=<your-admin-password>
+#    AIO_TOKEN=<strong-random-token>
+#    TURN_SECRET=<strong-random-secret>
+#    SIGNALING_SECRET=<strong-random-secret>
+#    IMAGINARY_SECRET=<strong-random-secret>
+#    WHITEBOARD_SECRET=<strong-random-secret>
+#    INTERNAL_SECRET=<strong-random-secret>
+#
+# 2. NAS STORAGE MOUNT:
+#    Before starting containers, mount your NAS share:
+#    - Create mount point: sudo mkdir -p /mnt/nas-nextcloud-data
+#    - Mount NFS share: Add to /etc/fstab or use systemd mount
+#    - Ensure proper permissions (www-data user, UID 33)
+#
+# 3. EXTERNAL NGINX CONFIGURATION:
+#    Configure your external Nginx to proxy to: http://vm-ip:11000
+#    Include WebSocket support for notify-push and talk
+#
+# 4. FIREWALL RULES:
+#    - Port 11000/tcp: Incoming from Nginx reverse proxy
+#    - Port 3478/tcp+udp: Incoming for Talk (WebRTC)
+#
+# 5. BACKUP STRATEGY:
+#    - Database: Automated dumps to nextcloud_aio_database_dump volume
+#    - User files: Already on NAS (ensure NAS has backups)
+#    - Configuration: Backup .env file and this docker-compose.yaml
+#
+# 6. MONITORING:
+#    Monitor container health: docker compose ps
+#    View logs: docker compose logs -f [service-name]
+#
+# ============================================================================

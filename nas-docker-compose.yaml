@@ -1,0 +1,387 @@
+version: "3"
+services:
+  clamav:
+    command:
+      - /bootstrap.sh
+    container_name: clamav
+    environment:
+      - PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - DEBIAN_VERSION=buster
+    hostname: 37d16ce7a85e
+    image: mkodockx/docker-clamav
+    ipc: private
+    labels:
+      maintainer: "Markus Kosmal <code@m-ko.de>"
+    logging:
+      driver: db
+      options: {}
+    mac_address: 02:42:ac:11:00:04
+    networks:
+      - bridge
+    ports:
+      - 3310:3310/tcp
+    user: clamav
+  nextcloud-aio-apache:
+    cap_drop:
+      - NET_RAW
+    command:
+      - "/usr/bin/supervisord -c /supervisord.conf"
+    container_name: nextcloud-aio-apache
+    cpu_shares: 50
+    entrypoint:
+      - /start.sh
+    environment:
+      - NC_DOMAIN=nextcloud.infinitylabs.co.il
+      - NEXTCLOUD_HOST=nextcloud-aio-nextcloud
+      - APACHE_HOST=nextcloud-aio-apache
+      - COLLABORA_HOST=nextcloud-aio-collabora
+      - TALK_HOST=nextcloud-aio-talk
+      - APACHE_PORT=11000
+      - ONLYOFFICE_HOST=nextcloud-aio-onlyoffice
+      - TZ=Etc/UTC
+      - APACHE_MAX_SIZE=17179869184
+      - APACHE_MAX_TIME=3600
+      - NOTIFY_PUSH_HOST=nextcloud-aio-notify-push
+      - WHITEBOARD_HOST=nextcloud-aio-whiteboard
+      - PATH=/usr/local/apache2/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - HTTPD_PREFIX=/usr/local/apache2
+      - HTTPD_VERSION=2.4.63
+      - HTTPD_SHA256=88fc236ab99b2864b248de7d49a008ec2afd7551e64dce8b95f58f32f94c46ab
+      - HTTPD_PATCHES=
+    hostname: 7c190e15fa5d
+    image: nextcloud/aio-apache:latest
+    ipc: private
+    labels:
+      com.centurylinklabs.watchtower.enable: false
+    logging:
+      driver: db
+      options: {}
+    networks:
+      - nextcloud-aio
+    ports:
+      - 127.0.0.1:11000:11000/tcp
+    read_only: true
+    security_opt:
+      - label:disable
+    user: 33
+    volumes:
+      - nextcloud_aio_nextcloud:/var/www/html:ro
+      - nextcloud_aio_apache:/mnt/data:rw
+    working_dir: /usr/local/apache2
+  nextcloud-aio-database:
+    cap_drop:
+      - NET_RAW
+    container_name: nextcloud-aio-database
+    cpu_shares: 50
+    entrypoint:
+      - /start.sh
+    environment:
+      - POSTGRES_PASSWORD=1e0ca6b6b337e031b5be195000eac790d3931f0c59ffa190
+      - POSTGRES_DB=nextcloud_database
+      - POSTGRES_USER=nextcloud
+      - TZ=Etc/UTC
+      - PGTZ=Etc/UTC
+      - PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - GOSU_VERSION=1.17
+      - LANG=en_US.utf8
+      - PG_MAJOR=16
+      - PG_VERSION=16.8
+      - PG_SHA256=9468083a56ce0ee7d294601b74dad3dd9fc69d87aff61f0a9fb63c813ff7efd8
+      - "DOCKER_PG_LLVM_DEPS=llvm19-dev 		clang19"
+      - PGDATA=/var/lib/postgresql/data
+    hostname: f2f89f463d71
+    image: nextcloud/aio-postgresql:latest
+    ipc: private
+    labels:
+      com.centurylinklabs.watchtower.enable: false
+    logging:
+      driver: db
+      options: {}
+    networks:
+      - nextcloud-aio
+    read_only: true
+    security_opt:
+      - label:disable
+    user: 999
+    volumes:
+      - nextcloud_aio_database:/var/lib/postgresql/data:rw
+      - nextcloud_aio_database_dump:/mnt/data:rw
+    working_dir: /
+  nextcloud-aio-imaginary:
+    cap_add:
+      - SYS_NICE
+    cap_drop:
+      - NET_RAW
+    container_name: nextcloud-aio-imaginary
+    cpu_shares: 50
+    entrypoint:
+      - /start.sh
+    environment:
+      - TZ=Etc/UTC
+      - IMAGINARY_SECRET=73b12265b363563a62dc4dd210ca47b33eced4f20251e876
+      - PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - PORT=9000
+      - MALLOC_ARENA_MAX=2
+    hostname: 0879bf689d26
+    image: nextcloud/aio-imaginary:latest
+    ipc: private
+    labels:
+      com.centurylinklabs.watchtower.enable: false
+    logging:
+      driver: db
+      options: {}
+    networks:
+      - nextcloud-aio
+    read_only: true
+    security_opt:
+      - label:disable
+    user: 65534
+    working_dir: /
+  nextcloud-aio-nextcloud:
+    cap_drop:
+      - NET_RAW
+    command:
+      - "/usr/bin/supervisord -c /supervisord.conf"
+    container_name: nextcloud-aio-nextcloud
+    cpu_shares: 50
+    entrypoint:
+      - /start.sh
+    environment:
+      - NEXTCLOUD_HOST=nextcloud-aio-nextcloud
+      - POSTGRES_HOST=nextcloud-aio-database
+      - POSTGRES_PORT=5432
+      - POSTGRES_PASSWORD=1e0ca6b6b337e031b5be195000eac790d3931f0c59ffa190
+      - POSTGRES_DB=nextcloud_database
+      - POSTGRES_USER=nextcloud
+      - REDIS_HOST=nextcloud-aio-redis
+      - REDIS_HOST_PASSWORD=a502d537791d19e15a3eba85b321e9eb22178af2c96db72b
+      - APACHE_HOST=nextcloud-aio-apache
+      - APACHE_PORT=11000
+      - AIO_TOKEN=b2cfab2ea363ac1e7fa7099851bb1eaae58f567616806a28
+      - NC_DOMAIN=nextcloud.infinitylabs.co.il
+      - ADMIN_USER=admin
+      - ADMIN_PASSWORD=2c1e3d883cbdd5cea4cbbc569d698e3bf8889ff2c1db0af0
+      - NEXTCLOUD_DATA_DIR=/mnt/ncdata
+      - OVERWRITEHOST=nextcloud.infinitylabs.co.il
+      - OVERWRITEPROTOCOL=https
+      - TURN_SECRET=934d7dd7289c6278803f1792f7d80aad2698134398f2a8e3
+      - SIGNALING_SECRET=6669df93c3e1baa2917c8119940a288f51f925b3d7127846
+      - ONLYOFFICE_SECRET=f4975573c6a6d67fdee74a5f14beaad8c7911aee7cca060a
+      - AIO_URL=10.6.0.21:8080
+      - NEXTCLOUD_MOUNT=
+      - CLAMAV_ENABLED=
+      - CLAMAV_HOST=nextcloud-aio-clamav
+      - ONLYOFFICE_ENABLED=
+      - COLLABORA_ENABLED=yes
+      - COLLABORA_HOST=nextcloud-aio-collabora
+      - TALK_ENABLED=yes
+      - ONLYOFFICE_HOST=nextcloud-aio-onlyoffice
+      - UPDATE_NEXTCLOUD_APPS=
+      - TZ=Etc/UTC
+      - TALK_PORT=3478
+      - IMAGINARY_ENABLED=yes
+      - IMAGINARY_HOST=nextcloud-aio-imaginary
+      - CLAMAV_MAX_SIZE=17179869184
+      - PHP_UPLOAD_LIMIT=16G
+      - PHP_MEMORY_LIMIT=512M
+      - FULLTEXTSEARCH_ENABLED=
+      - FULLTEXTSEARCH_HOST=nextcloud-aio-fulltextsearch
+      - PHP_MAX_TIME=3600
+      - TRUSTED_CACERTS_DIR=
+      - "STARTUP_APPS=deck twofactor_totp tasks calendar contacts notes"
+      - ADDITIONAL_APKS=imagemagick
+      - ADDITIONAL_PHP_EXTENSIONS=imagick
+      - INSTALL_LATEST_MAJOR=yes
+      - TALK_RECORDING_ENABLED=
+      - RECORDING_SECRET=29aa068ce68cc525fa5d3443bfffbf77d63af2c94ca78fb6
+      - TALK_RECORDING_HOST=nextcloud-aio-talk-recording
+      - FULLTEXTSEARCH_PASSWORD=b9087d16bdb71913f199546a281d1028bd2f16d8442f01f7
+      - DOCKER_SOCKET_PROXY_ENABLED=
+      - REMOVE_DISABLED_APPS=yes
+      - ADDITIONAL_TRUSTED_PROXY=
+      - THIS_IS_AIO=true
+      - IMAGINARY_SECRET=73b12265b363563a62dc4dd210ca47b33eced4f20251e876
+      - WHITEBOARD_SECRET=1affb90dd9b48f1718745e589a77b1f1f63494b6f8ce0b0b
+      - WHITEBOARD_ENABLED=yes
+      - |
+        NEXTCLOUD_EXEC_COMMANDS=echo 'Activating Collabora config...'
+        php /var/www/html/occ richdocuments:activate-config
+      - PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - "PHPIZE_DEPS=autoconf 		dpkg-dev dpkg 		file 		g++ 		gcc 		libc-dev 		make
+        pkgconf 		re2c"
+      - PHP_INI_DIR=/usr/local/etc/php
+      - "PHP_CFLAGS=-fstack-protector-strong -fpic -fpie -O2 -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64"
+      - "PHP_CPPFLAGS=-fstack-protector-strong -fpic -fpie -O2 -D_LARGEFILE_SOURCE
+        -D_FILE_OFFSET_BITS=64"
+      - "PHP_LDFLAGS=-Wl,-O1 -pie"
+      - "GPG_KEYS=1198C0117593497A5EC5C199286AF1F9897469DC C28D937575603EB4ABB725861C0779DC5C0A9DE4
+        AFD8691FDAEDF03BDF6E460563F15A9B715376CA"
+      - PHP_VERSION=8.3.17
+      - PHP_URL=https://www.php.net/distributions/php-8.3.17.tar.xz
+      - PHP_ASC_URL=https://www.php.net/distributions/php-8.3.17.tar.xz.asc
+      - PHP_SHA256=6158ee678e698395da13d72c7679a406d2b7554323432f14d37b60ed87d8ccfb
+      - SOURCE_LOCATION=/usr/src/nextcloud
+      - REDIS_DB_INDEX=0
+      - NEXTCLOUD_VERSION=30.0.6
+    hostname: c524699b0a77
+    image: nextcloud/aio-nextcloud:latest
+    ipc: private
+    labels:
+      com.centurylinklabs.watchtower.enable: false
+    logging:
+      driver: db
+      options: {}
+    networks:
+      - nextcloud-aio
+    security_opt:
+      - label:disable
+    user: root
+    volumes:
+      - nextcloud_aio_nextcloud:/var/www/html:rw
+      - nextcloud_aio_nextcloud_data:/mnt/ncdata:rw
+    working_dir: /var/www/html
+  nextcloud-aio-notify-push:
+    cap_drop:
+      - NET_RAW
+    container_name: nextcloud-aio-notify-push
+    cpu_shares: 50
+    entrypoint:
+      - /start.sh
+    environment:
+      - NC_DOMAIN=nextcloud.infinitylabs.co.il
+      - NEXTCLOUD_HOST=nextcloud-aio-nextcloud
+      - TZ=Etc/UTC
+      - REDIS_HOST=nextcloud-aio-redis
+      - REDIS_HOST_PASSWORD=a502d537791d19e15a3eba85b321e9eb22178af2c96db72b
+      - POSTGRES_HOST=nextcloud-aio-database
+      - POSTGRES_PORT=5432
+      - POSTGRES_PASSWORD=1e0ca6b6b337e031b5be195000eac790d3931f0c59ffa190
+      - POSTGRES_DB=nextcloud_database
+      - POSTGRES_USER=nextcloud
+      - PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    hostname: 7f9936111090
+    image: nextcloud/aio-notify-push:latest
+    ipc: private
+    labels:
+      com.centurylinklabs.watchtower.enable: false
+    logging:
+      driver: db
+      options: {}
+    networks:
+      - nextcloud-aio
+    read_only: true
+    security_opt:
+      - label:disable
+    user: 33
+    volumes:
+      - nextcloud_aio_nextcloud:/nextcloud:ro
+    working_dir: /
+  nextcloud-aio-redis:
+    cap_drop:
+      - NET_RAW
+    container_name: nextcloud-aio-redis
+    cpu_shares: 50
+    entrypoint:
+      - /start.sh
+    environment:
+      - REDIS_HOST_PASSWORD=a502d537791d19e15a3eba85b321e9eb22178af2c96db72b
+      - TZ=Etc/UTC
+      - PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - GOSU_VERSION=1.17
+      - REDIS_VERSION=7.2.7
+      - REDIS_DOWNLOAD_URL=http://download.redis.io/releases/redis-7.2.7.tar.gz
+      - REDIS_DOWNLOAD_SHA=72c081e3b8cfae7144273d26d76736f08319000af46c01515cad5d29765cead5
+    hostname: d8985506e3e6
+    image: nextcloud/aio-redis:latest
+    ipc: private
+    labels:
+      com.centurylinklabs.watchtower.enable: false
+    logging:
+      driver: db
+      options: {}
+    networks:
+      - nextcloud-aio
+    read_only: true
+    security_opt:
+      - label:disable
+    user: 999
+    volumes:
+      - nextcloud_aio_redis:/data:rw
+    working_dir: /data
+  nextcloud-aio-talk:
+    cap_drop:
+      - NET_RAW
+    command:
+      - "supervisord -c /supervisord.conf"
+    container_name: nextcloud-aio-talk
+    cpu_shares: 50
+    entrypoint:
+      - /start.sh
+    environment:
+      - NC_DOMAIN=nextcloud.infinitylabs.co.il
+      - TALK_HOST=nextcloud-aio-talk
+      - TURN_SECRET=934d7dd7289c6278803f1792f7d80aad2698134398f2a8e3
+      - SIGNALING_SECRET=6669df93c3e1baa2917c8119940a288f51f925b3d7127846
+      - TZ=Etc/UTC
+      - TALK_PORT=3478
+      - INTERNAL_SECRET=85a7c920ed100e3b0dce1b283d2b7f927d0b239b418f8fa2
+      - PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - ETURNAL_ETC_DIR=/conf
+    hostname: 5d9e1af0966f
+    image: nextcloud/aio-talk:latest
+    ipc: private
+    labels:
+      com.centurylinklabs.watchtower.enable: false
+    logging:
+      driver: db
+      options: {}
+    networks:
+      - nextcloud-aio
+    ports:
+      - 3478:3478/tcp
+      - 3478:3478/udp
+    read_only: true
+    security_opt:
+      - label:disable
+    ulimits:
+      - Hard: 200000
+        Name: nofile
+        Soft: 200000
+    user: 1000
+    working_dir: /
+  nextcloud-aio-whiteboard:
+    cap_drop:
+      - NET_RAW
+    container_name: nextcloud-aio-whiteboard
+    cpu_shares: 50
+    entrypoint:
+      - /start.sh
+    environment:
+      - TZ=Etc/UTC
+      - NEXTCLOUD_URL=https://nextcloud.infinitylabs.co.il
+      - JWT_SECRET_KEY=1affb90dd9b48f1718745e589a77b1f1f63494b6f8ce0b0b
+      - STORAGE_STRATEGY=redis
+      - REDIS_HOST=nextcloud-aio-redis
+      - REDIS_HOST_PASSWORD=a502d537791d19e15a3eba85b321e9eb22178af2c96db72b
+      - BACKUP_DIR=/tmp
+      - PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - NODE_VERSION=23.6.0
+      - YARN_VERSION=1.22.22
+    hostname: 10b7b1922430
+    image: nextcloud/aio-whiteboard:latest
+    ipc: private
+    labels:
+      com.centurylinklabs.watchtower.enable: false
+    logging:
+      driver: db
+      options: {}
+    networks:
+      - nextcloud-aio
+    read_only: true
+    security_opt:
+      - label:disable
+    user: 65534
+    working_dir: /tmp
+networks:
+  bridge:
+    external: true
