@@ -39,14 +39,18 @@ Before you start, ensure you have:
 sudo apt update && sudo apt upgrade -y
 
 # 1.2 - Install required packages
-sudo apt install -y curl nfs-common vim
+sudo apt install -y curl nfs-common vim net-tools
 
 # 1.3 - Install Docker
 curl -fsSL https://get.docker.com -o get-docker.sh
 sudo sh get-docker.sh
 sudo usermod -aG docker $USER
 
-# 1.4 - Logout and login again for Docker group to take effect
+# 1.4 - Optimize system for NextCloud
+echo "fs.inotify.max_user_watches=524288" | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+
+# 1.5 - Logout and login again for Docker group to take effect
 exit
 ```
 
@@ -386,38 +390,60 @@ Expected output:
 **Location: Ubuntu VM**
 
 ```bash
-# 13.1 - Test HTTP access locally
-curl -I http://localhost:11000
-
-# 13.2 - Check all services
+# 13.1 - Check all containers are running
 docker compose ps
 
-# 13.3 - Verify database
+# Expected: All containers show "Up" or "Up (healthy)"
+
+# 13.2 - Test HTTP access locally
+curl -I http://localhost:11000
+
+# Expected: HTTP/1.1 302 Found (redirect response)
+
+# 13.3 - Verify NextCloud status
+docker exec -u www-data nextcloud-aio-nextcloud php occ status
+
+# Expected: installed: true, maintenance: false
+
+# 13.4 - Verify database connection
 docker exec -u www-data nextcloud-aio-nextcloud php occ db:status
 
-# 13.4 - Scan files (verify NAS storage access)
-docker exec -u www-data nextcloud-aio-nextcloud php occ files:scan --all
+# Expected: Database connection successful
 
-# 13.5 - Check for errors
-docker compose logs | grep -i error | tail -50
+# 13.5 - Verify NAS storage access
+docker exec -u www-data nextcloud-aio-nextcloud ls -la /mnt/ncdata
+
+# Expected: You should see your user data folders
+
+# 13.6 - Check for errors in logs
+docker compose logs nextcloud-aio-nextcloud | grep -i error | tail -20
+docker compose logs nextcloud-aio-database | grep -i error | tail -20
+
+# Expected: No critical errors (some warnings are normal)
 ```
 
-**Test from another computer:**
+**Test from another computer on your local network:**
 
 ```bash
-# Add to /etc/hosts temporarily (on your test computer, not VM)
+# On your test computer (Linux/Mac), add temporary hosts entry
 echo "<VM-IP> nextcloud.infinitylabs.co.il" | sudo tee -a /etc/hosts
 
-# Open browser and test
+# On Windows, edit C:\Windows\System32\drivers\etc\hosts as Administrator
+# Add line: <VM-IP> nextcloud.infinitylabs.co.il
+
+# Open browser and navigate to:
 # http://nextcloud.infinitylabs.co.il:11000
 ```
 
-Login and verify:
+**In the browser, verify:**
 - ✅ Can log in with admin account
-- ✅ See all files
+- ✅ See all files from NAS storage
 - ✅ Can upload a test file
 - ✅ Can download a file
-- ✅ Can edit a document (Collabora)
+- ✅ Can open and edit a document (Collabora)
+- ✅ Files show correct sizes and timestamps
+
+**IMPORTANT:** This tests before switching over your Nginx proxy. Keep this hosts entry until Step 16.
 
 ---
 
@@ -478,34 +504,49 @@ sudo systemctl reload nginx
 
 ### STEP 15: Update Firewall Rules (5 minutes)
 
-**On your router/firewall:**
-
-1. Update port forwarding for port 11000:
-   - Change from: `NAS-IP:11000`
-   - Change to: `VM-IP:11000`
-
-2. Update Talk ports (3478 TCP/UDP):
-   - Change from: `NAS-IP:3478`
-   - Change to: `VM-IP:3478`
-
-**On Ubuntu VM:**
+**On Ubuntu VM first:**
 
 ```bash
-# If using UFW firewall
-sudo ufw allow 11000/tcp comment 'NextCloud'
-sudo ufw allow 3478/tcp comment 'NextCloud Talk'
-sudo ufw allow 3478/udp comment 'NextCloud Talk'
+# Configure UFW firewall (if not already enabled)
+sudo ufw status
+
+# If inactive, enable it (be careful on remote SSH sessions!)
+# sudo ufw allow ssh
+# sudo ufw enable
+
+# Allow NextCloud ports
+sudo ufw allow from any to any port 11000 proto tcp comment 'NextCloud Apache'
+sudo ufw allow from any to any port 3478 proto tcp comment 'NextCloud Talk TCP'
+sudo ufw allow from any to any port 3478 proto udp comment 'NextCloud Talk UDP'
+
+# Reload firewall
 sudo ufw reload
+
+# Verify rules
+sudo ufw status numbered
 ```
+
+**On your router/firewall:**
+
+1. Update port forwarding for port 11000 TCP:
+   - Change destination from: `NAS-IP:11000`
+   - Change destination to: `VM-IP:11000`
+
+2. Update Talk ports (3478 TCP/UDP):
+   - Change destination from: `NAS-IP:3478`
+   - Change destination to: `VM-IP:3478`
 
 ---
 
-### STEP 16: Go Live! (1 minute)
-**Location: Your local computer**
+### STEP 16: Go Live! (5 minutes)
+
+**On your test computer:**
 
 ```bash
-# Remove the /etc/hosts entry you added in STEP 13
-sudo sed -i '/<VM-IP> nextcloud.infinitylabs.co.il/d' /etc/hosts
+# Linux/Mac - Remove the /etc/hosts entry you added in STEP 13
+sudo sed -i.bak '/<VM-IP> nextcloud.infinitylabs.co.il/d' /etc/hosts
+
+# Windows - Remove the line you added to C:\Windows\System32\drivers\etc\hosts
 ```
 
 **Test from browser:**
@@ -513,7 +554,15 @@ sudo sed -i '/<VM-IP> nextcloud.infinitylabs.co.il/d' /etc/hosts
 https://nextcloud.infinitylabs.co.il
 ```
 
-✅ **You should now see NextCloud running from the VM!**
+**Verify the migration is complete:**
+1. ✅ You access NextCloud via HTTPS (Nginx SSL termination)
+2. ✅ You can log in with your credentials
+3. ✅ All files are visible and accessible
+4. ✅ You can upload and download files
+5. ✅ Collabora works for document editing
+6. ✅ No certificate warnings (uses your existing SSL cert)
+
+✅ **NextCloud is now running from the VM with NAS storage!**
 
 ---
 
@@ -625,23 +674,30 @@ sudo rm -rf /volume1/backups/nextcloud-migration
 
 ## 🆘 Quick Rollback (If Something Goes Wrong)
 
-**If you need to rollback to NAS:**
+**If you need to rollback to NAS (only works if you haven't removed NAS volumes yet):**
 
-**On Ubuntu VM:**
+**Step 1 - Stop VM containers:**
 ```bash
+# On Ubuntu VM
 cd ~/nextcloud
 docker compose down
 ```
 
-**On Synology NAS:**
+**Step 2 - Restart NAS containers:**
 ```bash
+# On Synology NAS
 ssh admin@<NAS-IP>
 cd /volume1/docker
-sudo docker exec -u www-data nextcloud-aio-nextcloud php occ maintenance:mode --off
 sudo docker compose -f nas-docker-compose.yaml up -d
+
+# Wait for containers to start, then disable maintenance mode
+sleep 30
+sudo docker exec -u www-data nextcloud-aio-nextcloud php occ maintenance:mode --off
 ```
 
-**Update Nginx** to point back to NAS IP.
+**Step 3 - Update Nginx reverse proxy** to point back to NAS IP:11000
+
+**Step 4 - Update firewall** rules to point back to NAS IP
 
 ---
 
@@ -649,12 +705,15 @@ sudo docker compose -f nas-docker-compose.yaml up -d
 
 | Problem | Solution |
 |---------|----------|
-| Can't mount NFS | Check NFS service on NAS, verify IP in export config |
-| Containers won't start | Check `.env` file has correct secrets, check logs with `docker compose logs` |
+| Can't mount NFS | Check NFS service on NAS: `sudo systemctl status nfs-server`, verify NFS export: `sudo exportfs -v`, test from VM: `showmount -e <NAS-IP>` |
+| Containers won't start | Check `.env` file has correct secrets, check logs: `docker compose logs [service-name]` |
+| Container exits immediately | Check for port conflicts: `sudo netstat -tulpn \| grep 11000`, verify secrets match in .env |
 | "Trusted domain" error | `docker exec -u www-data nextcloud-aio-nextcloud php occ config:system:set trusted_domains 0 --value=nextcloud.infinitylabs.co.il` |
-| Files not accessible | Verify NFS mount: `df -h \| grep nextcloud`, check permissions |
-| Database connection error | Verify POSTGRES_PASSWORD matches in .env file |
-| High CPU/RAM usage | Check `docker stats`, adjust resource limits in docker-compose.yaml |
+| Files not accessible | Verify NFS mount: `df -h \| grep nextcloud`, check mount: `mount \| grep nextcloud`, verify permissions: `ls -la /mnt/nas-nextcloud-data` |
+| Database connection error | Verify POSTGRES_PASSWORD matches in .env file, check database is running: `docker compose ps nextcloud-aio-database` |
+| High CPU/RAM usage | Check resource usage: `docker stats`, monitor: `htop`, adjust limits in docker-compose.yaml if needed |
+| Apache won't start | Check port 11000 not in use: `sudo lsof -i :11000`, verify localhost binding works |
+| Collabora not working | Check container logs: `docker compose logs nextcloud-aio-collabora`, verify network connectivity: `docker exec nextcloud-aio-nextcloud wget -O- http://nextcloud-aio-collabora:9980` |
 
 ---
 
@@ -662,7 +721,6 @@ sudo docker compose -f nas-docker-compose.yaml up -d
 
 - **Check logs:** `docker compose logs -f [service-name]`
 - **Check system status:** `docker exec -u www-data nextcloud-aio-nextcloud php occ status`
-- **See detailed guide:** `NEXTCLOUD_MIGRATION_GUIDE.md`
 
 ---
 
