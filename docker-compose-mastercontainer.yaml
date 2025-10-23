@@ -1,0 +1,318 @@
+# ============================================================================
+# Nextcloud AIO Mastercontainer - PRODUCTION CONFIGURATION
+# ============================================================================
+# Company: InfinityLabs
+# Environment: Ubuntu 24.04 VM on Hyper-V
+# Resources: 16GB RAM, 64GB Storage, 12 vCPUs
+# Network: Behind Nginx reverse proxy with SSL termination
+#
+# This docker-compose file manages ONLY the mastercontainer.
+# The mastercontainer will create and manage all other Nextcloud containers.
+#
+# IMPORTANT: This is the recommended production approach per official AIO docs
+# ============================================================================
+
+version: "3.8"
+
+services:
+  nextcloud-aio-mastercontainer:
+    image: nextcloud/all-in-one:latest
+    init: true
+    restart: always
+    container_name: nextcloud-aio-mastercontainer
+    hostname: nextcloud-aio-master
+
+    # ========================================================================
+    # NETWORK PORTS
+    # ========================================================================
+    ports:
+      # AIO web interface (self-signed cert) - access via VM IP only
+      - "8080:8080"
+      # NOTE: Port 8443 is NOT exposed - we use Nginx for SSL termination
+      # NOTE: Port 80 is NOT exposed - Nginx handles ACME challenges
+
+    # ========================================================================
+    # ENVIRONMENT VARIABLES - PRODUCTION CONFIGURATION
+    # ========================================================================
+    environment:
+      # === Apache Container Configuration ===
+      # Port where Nextcloud will be accessible (Nginx proxies to this)
+      APACHE_PORT: 11000
+
+      # Allow connections from any IP (Nginx reverse proxy)
+      # IMPORTANT: This is required when Nginx is on different server/network
+      APACHE_IP_BINDING: 0.0.0.0
+
+      # Put Apache container in additional network (if needed)
+      # Leave empty if Nginx is external
+      APACHE_ADDITIONAL_NETWORK: ""
+
+      # === Data Directory Configuration ===
+      # CRITICAL: This must point to the NFS mount we'll create
+      # This is where all user files will be stored (on NAS via NFS)
+      NEXTCLOUD_DATADIR: /mnt/nas-nextcloud-data
+
+      # === Domain Configuration ===
+      # Skip domain validation because we're behind reverse proxy
+      # You'll manually verify domain works after configuring Nginx
+      SKIP_DOMAIN_VALIDATION: false  # Will be set to true after first validation attempt
+
+      # === Timezone ===
+      # Set to your company timezone
+      TZ: Asia/Jerusalem
+
+      # === Backup Configuration ===
+      # Location for AIO backups (we'll configure this post-migration)
+      # BORG_BACKUP_HOST_LOCATION: /mnt/nas-backups  # Uncomment after migration
+
+      # === Update Configuration ===
+      # Automatic update channel (latest, beta, or specific version)
+      CHANNEL: latest
+
+      # === Watchtower Configuration ===
+      # Watchtower auto-updates containers - configure carefully for production
+      # Point to same docker socket
+      WATCHTOWER_DOCKER_SOCKET_PATH: /var/run/docker.sock
+
+      # === Performance Tuning ===
+      # Max PHP processes (tune based on concurrent users)
+      # Default is good for most cases, but can be adjusted
+      # NEXTCLOUD_MAX_TIME: 3600  # Max execution time (default is good)
+      # NEXTCLOUD_MEMORY_LIMIT: 2048M  # Uncomment if you need more than 512M default
+
+      # === Collabora Configuration ===
+      # COLLABORA_SECCOMP_DISABLED: false  # Set to true if Collabora fails with seccomp errors
+
+      # === Talk Configuration ===
+      # Talk recording server (disabled by default, enable if needed)
+      # TALK_RECORDING_ENABLED: no
+
+    # ========================================================================
+    # VOLUME MOUNTS
+    # ========================================================================
+    volumes:
+      # Mastercontainer configuration storage
+      # CRITICAL: Do not change this volume name - backups depend on it
+      - nextcloud_aio_mastercontainer:/mnt/docker-aio-config
+
+      # Docker socket for container management
+      # CRITICAL: Mastercontainer needs this to create/manage other containers
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+      # NFS mount for Nextcloud data (mounted on host, passed to containers)
+      # This ensures the mastercontainer can verify the mount and pass it to Apache container
+      - /mnt/nas-nextcloud-data:/mnt/nas-nextcloud-data:rw
+
+    # ========================================================================
+    # RESOURCE LIMITS - OPTIMIZED FOR 16GB RAM / 12 vCPU
+    # ========================================================================
+    # Mastercontainer is lightweight, doesn't need much
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+    # ========================================================================
+    # SECURITY OPTIONS
+    # ========================================================================
+    security_opt:
+      - label:disable
+
+    # ========================================================================
+    # HEALTH CHECK
+    # ========================================================================
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    # ========================================================================
+    # LOGGING CONFIGURATION
+    # ========================================================================
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        labels: "production,nextcloud,mastercontainer"
+
+# ============================================================================
+# VOLUMES
+# ============================================================================
+volumes:
+  # Mastercontainer configuration volume
+  # CRITICAL: Do not change this name - AIO backups depend on it
+  nextcloud_aio_mastercontainer:
+    name: nextcloud_aio_mastercontainer
+    driver: local
+
+# ============================================================================
+# NETWORKS
+# ============================================================================
+# Mastercontainer uses host network to create nextcloud-aio network
+# The nextcloud-aio network will be created automatically by the mastercontainer
+
+# ============================================================================
+# PRODUCTION DEPLOYMENT NOTES
+# ============================================================================
+#
+# 1. DEPLOYMENT COMMAND:
+#    docker compose -f docker-compose-mastercontainer.yaml up -d
+#
+# 2. VIEW LOGS:
+#    docker compose -f docker-compose-mastercontainer.yaml logs -f
+#
+# 3. STOP MASTERCONTAINER:
+#    docker compose -f docker-compose-mastercontainer.yaml down
+#    Note: This only stops mastercontainer, not the Nextcloud containers
+#
+# 4. UPDATE MASTERCONTAINER:
+#    docker compose -f docker-compose-mastercontainer.yaml pull
+#    docker compose -f docker-compose-mastercontainer.yaml up -d
+#
+# 5. CONTAINER MANAGEMENT:
+#    All other containers are managed via the AIO web interface at:
+#    https://<VM-IP>:8080
+#
+# 6. ACCESSING AIO INTERFACE:
+#    - Get password: docker logs nextcloud-aio-mastercontainer | grep "password"
+#    - Open: https://<VM-IP>:8080
+#    - Accept self-signed certificate
+#    - Enter password
+#
+# 7. IMPORTANT: After mastercontainer starts:
+#    - Wait 30 seconds for initialization
+#    - Access AIO interface
+#    - Configure your domain
+#    - Select optional containers
+#    - Click "Download and start containers"
+#    - DO NOT manually start containers with docker commands
+#
+# 8. BACKUP MANAGEMENT:
+#    - Backups are managed through AIO interface
+#    - Recommended: Configure backup location to NFS mount on NAS
+#    - Schedule daily backups via AIO interface
+#
+# 9. UPDATES:
+#    - Updates are managed through AIO interface
+#    - Can be automated with daily backup + update schedule
+#    - Test updates in maintenance window first
+#
+# 10. MONITORING:
+#    - Check container health: docker ps --filter name=nextcloud-aio
+#    - Check mastercontainer logs: docker compose logs -f
+#    - Check all container logs via AIO interface
+#    - Monitor resources: docker stats
+#
+# ============================================================================
+# TROUBLESHOOTING
+# ============================================================================
+#
+# Issue: Port 8080 already in use
+# Solution: Change "8080:8080" to "8081:8080" in ports section
+#
+# Issue: Permission denied on docker socket
+# Solution: Ensure user is in docker group: sudo usermod -aG docker $USER
+#           Then logout and login again
+#
+# Issue: NFS mount not accessible
+# Solution: Verify mount before starting: df -h | grep nas-nextcloud-data
+#           Test access: ls -la /mnt/nas-nextcloud-data
+#
+# Issue: Mastercontainer keeps restarting
+# Solution: Check logs: docker compose logs
+#           Verify volumes exist: docker volume ls
+#           Check disk space: df -h
+#
+# Issue: Can't access AIO interface
+# Solution: Verify port 8080 is not blocked: sudo ufw status
+#           Check if mastercontainer is running: docker ps
+#           Check logs for errors: docker compose logs
+#
+# ============================================================================
+# HYPER-V SPECIFIC CONSIDERATIONS
+# ============================================================================
+#
+# 1. Enhanced Session Mode:
+#    - If using enhanced session mode, ensure clipboard redirection works
+#    - May need to disable enhanced session for initial setup
+#
+# 2. Integration Services:
+#    - Ensure Hyper-V integration services are installed in Ubuntu VM
+#    - Check: sudo apt install linux-virtual linux-cloud-tools-virtual
+#
+# 3. Time Synchronization:
+#    - Hyper-V handles time sync automatically
+#    - Verify: timedatectl status
+#    - Should show: "System clock synchronized: yes"
+#
+# 4. Network Adapter:
+#    - Use Hyper-V network adapter (not legacy)
+#    - Ensure network adapter is connected to correct virtual switch
+#
+# 5. Dynamic Memory:
+#    - If using dynamic memory, set minimum to 8GB, maximum to 16GB
+#    - Startup RAM: 12GB recommended
+#    - Memory buffer: 20% recommended
+#
+# 6. Checkpoints:
+#    - Do NOT use checkpoints during migration
+#    - Disable automatic checkpoints for this VM
+#    - Checkpoints can cause data consistency issues
+#
+# 7. Storage:
+#    - Use fixed-size VHD/VHDX, not dynamic (better performance)
+#    - Ensure VHD is on fast storage (SSD preferred)
+#    - 64GB is minimum - consider expanding to 128GB for logs/temp files
+#
+# ============================================================================
+# RESOURCE ALLOCATION STRATEGY (16GB RAM / 12 vCPU / 64GB Storage)
+# ============================================================================
+#
+# VM Level:
+# - Total RAM: 16GB
+# - Total vCPU: 12 cores
+# - Total Storage: 64GB
+#
+# Allocation Plan:
+#
+# System/OS: ~2GB RAM, 1 vCPU
+# Docker Engine: ~1GB RAM, 1 vCPU
+# Mastercontainer: 512MB RAM, 1 vCPU
+#
+# Nextcloud Containers (managed by mastercontainer):
+# - Nextcloud: 4-6GB RAM, 4-6 vCPU (largest workload)
+# - PostgreSQL: 2-4GB RAM, 2-4 vCPU (database intensive)
+# - Redis: 1-2GB RAM, 1-2 vCPU (cache)
+# - Apache: 512MB-1GB RAM, 1-2 vCPU (proxy)
+# - Collabora: 2-3GB RAM, 2-3 vCPU (office rendering)
+# - Talk: 512MB-1GB RAM, 1 vCPU (WebRTC)
+# - Imaginary: 512MB RAM, 1 vCPU (image processing)
+# - Whiteboard: 256MB RAM, 0.5 vCPU (lightweight)
+# - Notify Push: 256MB RAM, 0.5 vCPU (lightweight)
+#
+# Total: ~12-15GB RAM, ~10-12 vCPU under normal load
+#
+# Storage Allocation:
+# - OS/System: ~10GB
+# - Docker images: ~5GB
+# - Docker volumes: ~15GB (database, redis, app files)
+# - Logs: ~2GB
+# - Temp/Cache: ~5GB
+# - Free space: ~27GB (42% free - good for production)
+#
+# Note: User data is on NAS via NFS, not counted in these 64GB
+#
+# Monitoring Recommendations:
+# - Set alerts at 80% RAM usage
+# - Set alerts at 75% disk usage
+# - Monitor CPU average - should stay below 60%
+# - Monitor NFS mount availability
+#
+# ============================================================================

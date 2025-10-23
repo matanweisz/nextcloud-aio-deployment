@@ -1,0 +1,28 @@
+# Nextcloud Migration - Git Ignore
+
+# Sensitive files
+.env
+*-secrets.txt
+migration-secrets.txt
+nextcloud-config.php
+database-dump.sql
+*.tar.gz
+
+# Logs
+*.log
+
+# Backups
+*.backup
+*.bak
+
+# Temporary files
+*.tmp
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Archive and old attempts (already in repo, but don't track changes)
+# archive/
+# old-attempts/
